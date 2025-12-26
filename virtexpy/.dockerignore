@@ -1,0 +1,22 @@
+# Игнорируем виртуальное окружение
+venv/
+.venv/
+env/
+
+# Игнорируем кэш Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Игнорируем файлы Git
+.git
+.gitignore
+
+# Игнорируем файлы окружения и настройки IDE
+.env
+.vscode/
+.idea/
+
+# Игнорируем сам Dockerfile
+Dockerfile*
