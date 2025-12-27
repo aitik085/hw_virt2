@@ -6,8 +6,16 @@ services:
       MYSQL_USER: app
       MYSQL_PASSWORD: very_strong
       MYSQL_ROOT_PASSWORD: root_password
+    # Добавляем принудительный бинд на все интерфейсы
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        echo "CREATE TABLE IF NOT EXISTS requests (id INT AUTO_INCREMENT PRIMARY KEY, host_name VARCHAR(255), request_date DATETIME DEFAULT CURRENT_TIMESTAMP, request_ip VARCHAR(255));" > /docker-entrypoint-initdb.d/init.sql
+        /usr/local/bin/docker-entrypoint.sh mysqld --bind-address=0.0.0.0
     networks:
-      - app-network
+      app-network:
+        ipv4_address: 172.20.0.10
 
   fastapi:
     build:
@@ -21,29 +29,39 @@ services:
     depends_on:
       - db
     networks:
-      - app-network
+      app-network:
+        ipv4_address: 172.20.0.5
+    
 
   haproxy:
     image: haproxy:2.8
     volumes:
       - ./haproxy/reverse/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "8080:8080" # Порт HAProxy
+      - "8090:8090" # Порт для Nginx (который «сидит» внутри сети HAProxy)
     depends_on:
       - fastapi
     networks:
-      - app-network
+      app-network:
+        ipv4_address: 172.20.0.6
+    extra_hosts:
+      - "localhost:172.20.0.5"
 
   nginx:
     image: nginx:latest
     volumes:
       - ./nginx/ingress/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/ingress/default.conf:/etc/nginx/conf.d/default.conf:ro
-    ports:
-      - "8090:8090"
+    #ports:
+    #  - "8090:8090"
     depends_on:
       - haproxy
-    networks:
-      - app-network
-
+    network_mode: "service:haproxy"
+    
 networks:
   app-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
