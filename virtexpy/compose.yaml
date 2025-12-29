@@ -1,67 +1,55 @@
-services:
-  db:
-    image: mysql:8.0
-    environment:
-      MYSQL_DATABASE: example
-      MYSQL_USER: app
-      MYSQL_PASSWORD: very_strong
-      MYSQL_ROOT_PASSWORD: root_password
-    # Добавляем принудительный бинд на все интерфейсы
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
+include: # Включаем в этот compose файл другой compose файл с прокси-сервером
+  - proxy.yaml # Путь к compose файлу с прокси-сервером
+
+services: # Описываем сервисы
+  db: # Сервис базы данных
+    image: mysql:8 # Используем официальный образ MySQL версии 8
+    restart: always  # Обязательный перезапуск при ошибках
+    
+    # Секретные переменные подтягиваются из файла .env
+    environment:  # Конфигурация базы данных через переменные окружения
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}   # Пароль root-пользователя из .env
+      MYSQL_DATABASE: ${MYSQL_DATABASE}   # Имя базы данных из .env
+      MYSQL_USER: ${MYSQL_USER}   # Имя пользователя базы данных из .env
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}   # Пароль пользователя базы данных из .env
+    
+    # создаем таблицы requests через entrypoint
+    entrypoint:  # Переопределяем точку входа контейнера
+      - /bin/bash # Используем bash для выполнения нескольких команд
+      - -c 
+      - | 
         echo "CREATE TABLE IF NOT EXISTS requests (id INT AUTO_INCREMENT PRIMARY KEY, host_name VARCHAR(255), request_date DATETIME DEFAULT CURRENT_TIMESTAMP, request_ip VARCHAR(255));" > /docker-entrypoint-initdb.d/init.sql
-        /usr/local/bin/docker-entrypoint.sh mysqld --bind-address=0.0.0.0
-    networks:
-      app-network:
-        ipv4_address: 172.20.0.10
-
-  fastapi:
-    build:
-      context: .
-      dockerfile: Dockerfile.python
-    environment:
-      DB_HOST: db
-      DB_USER: app
-      DB_PASSWORD: very_strong
-      DB_NAME: example
-    depends_on:
-      - db
-    networks:
-      app-network:
-        ipv4_address: 172.20.0.5
+        /usr/local/bin/docker-entrypoint.sh mysqld --bind-address=0.0.0.0 
     
-
-  haproxy:
-    image: haproxy:2.8
-    volumes:
-      - ./haproxy/reverse/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-    ports:
-      - "8080:8080" # Порт HAProxy
-      - "8090:8090" # Порт для Nginx (который «сидит» внутри сети HAProxy)
-    depends_on:
-      - fastapi
-    networks:
-      app-network:
-        ipv4_address: 172.20.0.6
-    extra_hosts:
-      - "localhost:172.20.0.5"
-
-  nginx:
-    image: nginx:latest
-    volumes:
-      - ./nginx/ingress/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/ingress/default.conf:/etc/nginx/conf.d/default.conf:ro
-    #ports:
-    #  - "8090:8090"
-    depends_on:
-      - haproxy
-    network_mode: "service:haproxy"
+    networks: # Контейнер работает в сетях
+      backend: # Сеть с названием backend
+        ipv4_address: 172.20.0.10 # Имеет фиксированный внутренний IP-адрес
     
-networks:
-  app-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/24
+    healthcheck: # Проверка состояния контейнера
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"] # Команда для проверки состояния
+      timeout: 5s # Таймаут ожидания ответа
+      retries: 10 # Количество попыток проверки состояния
+
+  web: # Веб-приложение
+    # Собираем из Dockerfile
+    build: # Сборка образа из Dockerfile
+      context: . # Путь к директории с Dockerfile
+      dockerfile: Dockerfile.python # Путь к Dockerfile
+    # ------------------- Используем образ из Registry -------------------
+    # ------------------- image: cr.yandex/YOUR_REGISTRY_ID/web-app:latest  -------------------
+    restart: always # Обязательный перезапуск при ошибках
+    environment: # Конфигурация приложения через переменные окружения
+      # Подключаемся по сетевому имени сервиса БД
+      DB_HOST: db # Имя сервиса базы данных из этого же файла compose.yaml
+      DB_USER: ${MYSQL_USER} # Имя пользователя БД из .env
+      DB_PASSWORD: ${MYSQL_PASSWORD} # Пароль пользователя БД из .env
+      DB_NAME: ${MYSQL_DATABASE} # Имя БД из .env
+    # Управление порядком запуска
+    depends_on: # Требует, чтобы сервис web запускался только после того, как запустится сервис db
+      db:  
+        condition: service_healthy # Ждет, пока база данных не просто запустится, а станет реально готова принимать запросы (Healthcheck)
+    networks: # Контейнер работает в сетях
+      backend: # Контейнер работает в сети с названием backend
+        ipv4_address: 172.20.0.5 # И имеет фиксированный внутренний IP-адрес
+
+  
